@@ -317,7 +317,6 @@ interface AppState {
   agentSessions: Record<string, AgentSession>;
   activeSessionId: string | null;
   sessionList: AgentSessionSummary[];
-  viewedThreadId: string | null;
 
   // Local drafts state (new emails composed by agent or user, not tied to threads)
   localDrafts: LocalDraft[];
@@ -527,11 +526,10 @@ interface AppState {
 
   // Session actions
   setActiveSessionId: (sessionId: string | null) => void;
-  loadSessionList: (accountId: string) => void;
+  loadSessionList: (accountId: string) => Promise<void>;
   createSession: (session: AgentSession) => void;
   updateSessionInStore: (sessionId: string, updates: Partial<AgentSession>) => void;
   removeSession: (sessionId: string) => void;
-  setViewedThreadId: (threadId: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -666,7 +664,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentSessions: {},
   activeSessionId: null,
   sessionList: [],
-  viewedThreadId: null,
 
   // Local drafts
   localDrafts: [],
@@ -1408,21 +1405,44 @@ export const useAppStore = create<AppState>((set, get) => ({
         events: [...existingRun.events, event],
       };
 
-      if (event.type === "state") {
-        updatedSessionRun.status = (event as { state: AgentProviderRun["status"] }).state;
+      // Mirror the same event-type handling as the legacy task path
+      if (!event.nestedRunId) {
+        if (event.type === "confirmation_required") {
+          updatedSessionRun.pendingConfirmation = {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            description: event.description,
+            input: event.input,
+          };
+          updatedSessionRun.status = "pending_approval";
+        } else if (event.type === "state") {
+          updatedSessionRun.status = event.state;
+          if (event.state !== "pending_approval") {
+            updatedSessionRun.pendingConfirmation = undefined;
+          }
+        } else if (event.type === "error") {
+          updatedSessionRun.status = "failed";
+        } else if (event.type === "done") {
+          updatedSessionRun.status = "completed";
+        }
       }
-      if (event.type === "confirmation_required") {
-        updatedSessionRun.pendingConfirmation = {
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          input: event.input,
-          description: event.description,
-        };
+
+      if (event.providerConversationId) {
+        updatedSessionRun.providerConversationId = event.providerConversationId;
       }
-      if ((event as { providerConversationId?: string }).providerConversationId) {
-        updatedSessionRun.providerConversationId = (
-          event as { providerConversationId: string }
-        ).providerConversationId;
+
+      const updatedSessionRuns = { ...session.runs, [sessionProviderId]: updatedSessionRun };
+
+      // Derive overall session status from all runs
+      const allSessionRuns = Object.values(updatedSessionRuns);
+      let sessionStatus = session.status;
+      if (allSessionRuns.every((r) => r.status === "completed")) {
+        sessionStatus = "completed";
+      } else if (allSessionRuns.some((r) => r.status === "failed")) {
+        sessionStatus = "failed";
+      } else if (allSessionRuns.some((r) => r.status === "pending_approval")) {
+        // Keep as active — pending_approval is a sub-state of active for sessions
+        sessionStatus = "active";
       }
 
       return {
@@ -1431,7 +1451,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...state.agentSessions,
           [taskId]: {
             ...session,
-            runs: { ...session.runs, [sessionProviderId]: updatedSessionRun },
+            status: sessionStatus,
+            runs: updatedSessionRuns,
             updatedAt: Date.now(),
           },
         },
@@ -1715,7 +1736,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
-  setViewedThreadId: (threadId) => set({ viewedThreadId: threadId }),
 }));
 
 // Expose store for E2E tests

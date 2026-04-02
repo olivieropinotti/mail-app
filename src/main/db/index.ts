@@ -16,6 +16,7 @@ import type {
   DraftMemory,
 } from "../../shared/types";
 import { createLogger } from "../services/logger";
+import type { AgentSession } from "../../shared/agent-types";
 
 const log = createLogger("db");
 
@@ -422,12 +423,22 @@ const NUMBERED_MIGRATIONS: Migration[] = [
         .get();
       if (!mirrorExists) return;
 
-      const traces = db.prepare("SELECT * FROM agent_conversation_mirror").all() as Array<{
+      // Join against emails to resolve account_id and email metadata for migrated sessions
+      const traces = db
+        .prepare(
+          `SELECT m.*, e.account_id, e.id AS email_id, e.thread_id
+           FROM agent_conversation_mirror m
+           LEFT JOIN emails e ON e.id = m.local_task_id`,
+        )
+        .all() as Array<{
         local_task_id: string;
         provider_id: string;
         messages_json: string;
         created_at: string;
         updated_at: string;
+        account_id: string | null;
+        email_id: string | null;
+        thread_id: string | null;
       }>;
 
       const insertSession = db.prepare(`
@@ -437,6 +448,9 @@ const NUMBERED_MIGRATIONS: Migration[] = [
 
       for (const trace of traces) {
         if (!trace.local_task_id) continue;
+        // Skip traces we can't associate with an account — they'd be invisible anyway
+        if (!trace.account_id) continue;
+
         let title = "Untitled session";
         try {
           const events = JSON.parse(trace.messages_json) as Array<{ type: string; text?: string }>;
@@ -457,9 +471,9 @@ const NUMBERED_MIGRATIONS: Migration[] = [
         insertSession.run(
           trace.local_task_id,
           title,
-          null,
-          null,
-          "",
+          trace.email_id,
+          trace.thread_id,
+          trace.account_id,
           JSON.stringify([trace.provider_id]),
           createdAt,
           updatedAt,
@@ -4342,7 +4356,7 @@ export interface AgentSessionRow {
   provider_ids: string; // JSON array
   created_at: number;
   updated_at: number;
-  status: string;
+  status: AgentSession["status"];
 }
 
 export function saveAgentSession(session: AgentSessionRow): void {
@@ -4387,7 +4401,7 @@ export function listAgentSessionsForEmail(emailId: string): AgentSessionRow[] {
 
 export function updateAgentSessionStatus(
   sessionId: string,
-  status: string,
+  status: AgentSession["status"],
   updatedAt = Date.now(),
 ): void {
   getDatabase()

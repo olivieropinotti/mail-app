@@ -147,10 +147,3 @@ export interface AgentSessionSummary {
   emailId: string | null;
 }
 
-/** Plain-text representation of one message in a thread, for agent context injection */
-export interface ThreadContextMessage {
-  from: string;
-  date: string;
-  body: string;
-  isFromUser: boolean;
-}

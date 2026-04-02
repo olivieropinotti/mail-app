@@ -80,14 +80,14 @@ function groupEventsForChat(events: ScopedAgentEvent[]): ChatGroup[] {
     switch (event.type) {
       case "text_delta":
         flushTools();
-        textBuffer += (event as ScopedAgentEvent & { type: "text_delta" }).text;
+        textBuffer += event.text;
         break;
       case "user_message":
         flushText();
         flushTools();
         groups.push({
           kind: "user",
-          text: (event as ScopedAgentEvent & { type: "user_message" }).text,
+          text: event.text,
         });
         break;
       case "tool_call_start":
@@ -106,7 +106,7 @@ function groupEventsForChat(events: ScopedAgentEvent[]): ChatGroup[] {
         flushTools();
         groups.push({
           kind: "error",
-          message: (event as ScopedAgentEvent & { type: "error" }).message,
+          message: event.message,
         });
         break;
       case "done":
@@ -261,49 +261,16 @@ export const AgentTabContent = memo(function AgentTabContent({ emailId }: { emai
       const truncateTitle = (text: string, max = 40): string =>
         text.length > max ? text.slice(0, max).replace(/\s+\S*$/, "") + "..." : text;
 
-      // Decide: follow up on existing session, or create new
-      if (
-        activeSession &&
-        (activeSession.status === "completed" || activeSession.status === "failed")
-      ) {
-        // Follow-up on existing session — create a new session that inherits context
-        const newSessionId = crypto.randomUUID();
-        const newSession: AgentSession = {
-          id: newSessionId,
-          title: truncateTitle(message),
-          emailId: selectedEmailId,
-          threadId: selectedThreadId,
-          accountId,
-          providerIds,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-          status: "active",
-          runs: {},
-        };
-        createSession(newSession);
-        startAgentTask(newSessionId, emailId, providerIds, message, context);
-        trackEvent("agent_follow_up", { source: "chat_panel" });
+      // Decide: follow up on existing session/legacy task, or create new
+      const isFollowUp =
+        (activeSession &&
+          (activeSession.status === "completed" || activeSession.status === "failed")) ||
+        (!activeSession &&
+          legacyTask &&
+          (legacyTask.status === "completed" || legacyTask.status === "failed"));
 
-        const result = (await window.api?.agent?.run?.(
-          newSessionId,
-          providerIds,
-          fullPrompt,
-          context,
-        )) as { success: boolean; error?: string } | undefined;
-
-        if (result && !result.success) {
-          useAppStore.getState().appendAgentEvent(newSessionId, {
-            type: "error",
-            message: result.error ?? "Failed to start agent task",
-            providerId: providerIds[0],
-          });
-        }
-      } else if (
-        !activeSession &&
-        legacyTask &&
-        (legacyTask.status === "completed" || legacyTask.status === "failed")
-      ) {
-        // Follow-up on legacy task — create a new session
+      if (isFollowUp) {
+        // Follow-up — create a new session that inherits context
         const newSessionId = crypto.randomUUID();
         const newSession: AgentSession = {
           id: newSessionId,
