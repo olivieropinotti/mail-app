@@ -220,6 +220,14 @@ export const EmailPreviewSidebar = memo(function EmailPreviewSidebar() {
     }
   }, [agentTaskKey, hasAgentTask, hasPersistedTrace, setSidebarTab, availableTabs]);
 
+  // Set the active session ID when the agent tab is active and there's a task
+  useEffect(() => {
+    const task = useAppStore.getState().agentTasks[displayAgentKey ?? ""];
+    if (task && sidebarTab === "agent") {
+      useAppStore.getState().setActiveSessionId(task.taskId);
+    }
+  }, [displayAgentKey, sidebarTab]);
+
   // Load persisted agent trace from DB when the selected email has a draft
   // with an agentTaskId but no in-memory agent task (e.g. after app restart).
   // Debounced to avoid blocking j/k navigation — traces can be very large
@@ -277,6 +285,26 @@ export const EmailPreviewSidebar = memo(function EmailPreviewSidebar() {
             },
             result.data.events,
           );
+
+          // Create a session record for the restored trace so it shows in session history
+          const { createSession } = useAppStore.getState();
+          createSession({
+            id: taskId,
+            title: email.subject || "Restored session",
+            emailId: email.id,
+            threadId: email.threadId || null,
+            accountId: email.accountId || "",
+            providerIds: ["claude"],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            status: "completed",
+            runs: {
+              claude: {
+                status: "completed",
+                events: result.data.events,
+              },
+            },
+          });
         })
         .catch((err: unknown) => {
           console.error("[EmailPreviewSidebar] Failed to load agent trace:", err);
