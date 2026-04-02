@@ -22,6 +22,8 @@ import type {
   AgentTaskHistoryEntry,
   ScopedAgentEvent,
   AgentContext,
+  AgentSession,
+  AgentSessionSummary,
 } from "../../shared/agent-types";
 
 export type SettingsTab =
@@ -311,6 +313,12 @@ interface AppState {
   agentTaskHistory: AgentTaskHistoryEntry[];
   globalAgentTaskKey: string | null; // non-null when a non-email agent task is active
 
+  // Session-based agent state (new)
+  agentSessions: Record<string, AgentSession>;
+  activeSessionId: string | null;
+  sessionList: AgentSessionSummary[];
+  viewedThreadId: string | null;
+
   // Local drafts state (new emails composed by agent or user, not tied to threads)
   localDrafts: LocalDraft[];
   selectedDraftId: string | null;
@@ -516,6 +524,14 @@ interface AppState {
 
   // Mark-as-read action (imperative — call from Enter/click handlers directly)
   markThreadAsRead: (threadId: string) => void;
+
+  // Session actions
+  setActiveSessionId: (sessionId: string | null) => void;
+  loadSessionList: (accountId: string) => void;
+  createSession: (session: AgentSession) => void;
+  updateSessionInStore: (sessionId: string, updates: Partial<AgentSession>) => void;
+  removeSession: (sessionId: string) => void;
+  setViewedThreadId: (threadId: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -645,6 +661,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentTaskIdMap: {},
   agentTaskHistory: [],
   globalAgentTaskKey: null,
+
+  // Session-based agent state (new)
+  agentSessions: {},
+  activeSessionId: null,
+  sessionList: [],
+  viewedThreadId: null,
 
   // Local drafts
   localDrafts: [],
@@ -1365,10 +1387,45 @@ export const useAppStore = create<AppState>((set, get) => ({
         taskStatus = "pending_approval";
       }
 
-      return {
+      const newAgentTasksState = {
         agentTasks: {
           ...state.agentTasks,
           [emailId]: { ...task, runs: updatedRuns, status: taskStatus },
+        },
+      };
+
+      // Also update session if one exists with the same taskId
+      const session = state.agentSessions[taskId];
+      if (!session) return newAgentTasksState;
+
+      const sessionProviderId = event.providerId || session.providerIds[0] || "unknown";
+      const existingRun = session.runs[sessionProviderId] || { status: "running" as const, events: [] };
+      const updatedSessionRun: AgentProviderRun = { ...existingRun, events: [...existingRun.events, event] };
+
+      if (event.type === "state") {
+        updatedSessionRun.status = (event as { state: AgentProviderRun["status"] }).state;
+      }
+      if (event.type === "confirmation_required") {
+        updatedSessionRun.pendingConfirmation = {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.input,
+          description: event.description,
+        };
+      }
+      if ((event as { providerConversationId?: string }).providerConversationId) {
+        updatedSessionRun.providerConversationId = (event as { providerConversationId: string }).providerConversationId;
+      }
+
+      return {
+        ...newAgentTasksState,
+        agentSessions: {
+          ...state.agentSessions,
+          [taskId]: {
+            ...session,
+            runs: { ...session.runs, [sessionProviderId]: updatedSessionRun },
+            updatedAt: Date.now(),
+          },
         },
       };
     }),
@@ -1598,6 +1655,53 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
   },
+
+  // Session actions
+  setActiveSessionId: (sessionId) => set({ activeSessionId: sessionId }),
+
+  loadSessionList: async (accountId) => {
+    const result = await window.api.agent.listSessions(accountId);
+    if (result.success && result.data) {
+      set({ sessionList: result.data });
+    }
+  },
+
+  createSession: (session) =>
+    set((state) => ({
+      agentSessions: { ...state.agentSessions, [session.id]: session },
+      activeSessionId: session.id,
+      sessionList: [
+        { id: session.id, title: session.title, status: session.status, updatedAt: session.updatedAt, emailId: session.emailId },
+        ...state.sessionList,
+      ],
+    })),
+
+  updateSessionInStore: (sessionId, updates) =>
+    set((state) => {
+      const existing = state.agentSessions[sessionId];
+      if (!existing) return state;
+      const updated = { ...existing, ...updates, updatedAt: Date.now() };
+      return {
+        agentSessions: { ...state.agentSessions, [sessionId]: updated },
+        sessionList: state.sessionList.map((s) =>
+          s.id === sessionId
+            ? { ...s, title: updated.title, status: updated.status, updatedAt: updated.updatedAt }
+            : s
+        ),
+      };
+    }),
+
+  removeSession: (sessionId) =>
+    set((state) => {
+      const { [sessionId]: _, ...rest } = state.agentSessions;
+      return {
+        agentSessions: rest,
+        sessionList: state.sessionList.filter((s) => s.id !== sessionId),
+        activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId,
+      };
+    }),
+
+  setViewedThreadId: (threadId) => set({ viewedThreadId: threadId }),
 }));
 
 // Expose store for E2E tests
