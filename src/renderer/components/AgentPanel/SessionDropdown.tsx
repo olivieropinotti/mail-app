@@ -106,7 +106,8 @@ export function SessionDropdown({ onNewChat }: SessionDropdownProps) {
           ) : (
             <span
               className="truncate text-gray-900 dark:text-gray-100"
-              onDoubleClick={() => {
+              onDoubleClick={(e) => {
+                e.stopPropagation();
                 if (currentSession) {
                   setTitleDraft(currentSession.title);
                   setEditingTitle(true);

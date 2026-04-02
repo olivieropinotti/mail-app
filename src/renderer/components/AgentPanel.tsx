@@ -257,27 +257,42 @@ export const AgentTabContent = memo(function AgentTabContent({ emailId }: { emai
         userEmail: "",
       };
 
+      // Helper to truncate title at word boundary
+      const truncateTitle = (text: string, max = 40): string =>
+        text.length > max ? text.slice(0, max).replace(/\s+\S*$/, "") + "..." : text;
+
       // Decide: follow up on existing session, or create new
       if (
         activeSession &&
         (activeSession.status === "completed" || activeSession.status === "failed")
       ) {
-        // Follow-up on existing session — use legacy follow-up path for now
-        // The session's taskId is also its ID
-        followUpAgentTask(emailId, message);
-        const newTaskId = crypto.randomUUID();
-        useAppStore.getState().updateAgentTaskId(emailId, newTaskId);
+        // Follow-up on existing session — create a new session that inherits context
+        const newSessionId = crypto.randomUUID();
+        const newSession: AgentSession = {
+          id: newSessionId,
+          title: truncateTitle(message),
+          emailId: selectedEmailId,
+          threadId: selectedThreadId,
+          accountId,
+          providerIds,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "active",
+          runs: {},
+        };
+        createSession(newSession);
+        startAgentTask(newSessionId, emailId, providerIds, message, context);
         trackEvent("agent_follow_up", { source: "chat_panel" });
 
         const result = (await window.api?.agent?.run?.(
-          newTaskId,
+          newSessionId,
           providerIds,
           fullPrompt,
           context,
         )) as { success: boolean; error?: string } | undefined;
 
         if (result && !result.success) {
-          useAppStore.getState().appendAgentEvent(newTaskId, {
+          useAppStore.getState().appendAgentEvent(newSessionId, {
             type: "error",
             message: result.error ?? "Failed to start agent task",
             providerId: providerIds[0],
@@ -288,21 +303,33 @@ export const AgentTabContent = memo(function AgentTabContent({ emailId }: { emai
         legacyTask &&
         (legacyTask.status === "completed" || legacyTask.status === "failed")
       ) {
-        // Follow-up on legacy task
-        followUpAgentTask(emailId, message);
-        const newTaskId = crypto.randomUUID();
-        useAppStore.getState().updateAgentTaskId(emailId, newTaskId);
+        // Follow-up on legacy task — create a new session
+        const newSessionId = crypto.randomUUID();
+        const newSession: AgentSession = {
+          id: newSessionId,
+          title: truncateTitle(message),
+          emailId: selectedEmailId,
+          threadId: selectedThreadId,
+          accountId,
+          providerIds,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "active",
+          runs: {},
+        };
+        createSession(newSession);
+        startAgentTask(newSessionId, emailId, providerIds, message, context);
         trackEvent("agent_follow_up", { source: "chat_panel" });
 
         const result = (await window.api?.agent?.run?.(
-          newTaskId,
+          newSessionId,
           providerIds,
           fullPrompt,
           context,
         )) as { success: boolean; error?: string } | undefined;
 
         if (result && !result.success) {
-          useAppStore.getState().appendAgentEvent(newTaskId, {
+          useAppStore.getState().appendAgentEvent(newSessionId, {
             type: "error",
             message: result.error ?? "Failed to start agent task",
             providerId: providerIds[0],
@@ -313,7 +340,7 @@ export const AgentTabContent = memo(function AgentTabContent({ emailId }: { emai
         const sessionId = crypto.randomUUID();
         const session: AgentSession = {
           id: sessionId,
-          title: message.slice(0, 60) + (message.length > 60 ? "..." : ""),
+          title: truncateTitle(message),
           emailId: selectedEmailId,
           threadId: selectedThreadId,
           accountId,
