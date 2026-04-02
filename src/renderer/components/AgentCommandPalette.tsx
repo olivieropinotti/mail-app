@@ -308,6 +308,27 @@ export function AgentCommandPalette({ isOpen, onClose }: AgentCommandPaletteProp
       // before any backend events arrive (avoids race condition).
       const taskId = crypto.randomUUID();
       startAgentTask(taskId, taskKey, effectiveProviderIds, effectivePrompt, context);
+
+      // Create a session record so the command palette launch is tracked in session history
+      const now = Date.now();
+      useAppStore.getState().createSession({
+        id: taskId,
+        title:
+          effectivePrompt.length > 40
+            ? effectivePrompt.slice(0, 40).replace(/\s+\S*$/, "") + "..."
+            : effectivePrompt,
+        emailId: selectedEmailId || null,
+        threadId: selectedThreadId || null,
+        accountId: currentAccountId || "",
+        providerIds: effectiveProviderIds,
+        createdAt: now,
+        updatedAt: now,
+        status: "active",
+        runs: Object.fromEntries(
+          effectiveProviderIds.map((pid) => [pid, { status: "running" as const, events: [] }]),
+        ),
+      });
+
       trackEvent("agent_run_started", {
         source: "manual",
         provider_count: effectiveProviderIds.length,
