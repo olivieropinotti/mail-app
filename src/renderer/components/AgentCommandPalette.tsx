@@ -300,13 +300,17 @@ export function AgentCommandPalette({ isOpen, onClose }: AgentCommandPaletteProp
         context.emailBody =
           selectedDraft.bodyText || stripHtml(selectedDraft.bodyHtml) || undefined;
       } else {
-        taskKey = GLOBAL_AGENT_KEY;
-        setGlobalAgentTaskKey(GLOBAL_AGENT_KEY);
+        // Use a unique key per non-email run so multiple can coexist in agentTasks
+        const globalTaskId = crypto.randomUUID();
+        taskKey = globalTaskId;
+        setGlobalAgentTaskKey(taskKey);
       }
 
       // Generate taskId on the frontend so the store mapping is populated
       // before any backend events arrive (avoids race condition).
-      const taskId = crypto.randomUUID();
+      // For non-email runs, taskId === taskKey (both are the UUID).
+      const taskId =
+        taskKey.startsWith("draft:") || selectedEmailId ? crypto.randomUUID() : taskKey;
       startAgentTask(taskId, taskKey, effectiveProviderIds, effectivePrompt, context);
 
       // Create a session record so the command palette launch is tracked in session history
